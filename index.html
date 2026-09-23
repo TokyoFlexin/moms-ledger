@@ -70,6 +70,10 @@ li.new{animation:feed .45s ease-out}
 .warn{color:var(--red)}
 .backup{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
 .backup button{font-weight:400;border-style:dashed}
+.sync{margin-top:14px;display:grid;gap:8px}
+.sync input{text-transform:none}
+.sync p{margin:0;font-size:11px;color:var(--faded)}
+.sync a{color:var(--ink)}
 .bars{height:34px;margin:14px auto 0;width:70%;background:repeating-linear-gradient(90deg,var(--ink) 0 2px,transparent 2px 4px,var(--ink) 4px 5px,transparent 5px 8px,var(--ink) 8px 11px,transparent 11px 12px)}
 @media (max-width:420px){.receipt{padding-inline:16px}.due{font-size:26px}.stamp{right:44px}}
 </style>
@@ -124,6 +128,20 @@ li.new{animation:feed .45s ease-out}
     <button type="button" id="importBtn">LOAD BACKUP</button>
     <input type="file" id="import" accept="application/json,.json" hidden>
   </div>
+  <details class="sync" id="syncBox">
+    <summary class="lbl">SYNC PHONE + LAPTOP</summary>
+    <div id="syncOff" class="sync">
+      <p>Paste your GitHub token for the private <b>moms-ledger-data</b> repo. Do this once on each device.</p>
+      <label class="lbl" for="token">TOKEN</label>
+      <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…">
+      <button type="button" id="connect">TURN ON SYNC</button>
+    </div>
+    <div id="syncOn" class="sync" hidden>
+      <p>Sync is on. Changes save to your private repo and show up on your other devices.</p>
+      <button type="button" id="syncNow">SYNC NOW</button>
+      <button type="button" id="disconnect">TURN OFF SYNC ON THIS DEVICE</button>
+    </div>
+  </details>
   <p class="foot" id="note">LOADING…</p>
   <div class="bars" aria-hidden="true"></div>
   <p class="foot">*** THANK YOU MOM ***</p>
@@ -133,25 +151,44 @@ li.new{animation:feed .45s ease-out}
 const $ = id => document.getElementById(id);
 const amt = c => (Math.abs(c) / 100).toLocaleString("en-AU", {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const dmy = iso => { const [y, m, d] = iso.split("-"); return `${d}/${m}`; };
-const KEY = "moms-ledger-v1";
+const KEY = "moms-ledger-v1", TOKEN_KEY = "moms-ledger-token";
+const API = "https://api.github.com/repos/TokyoFlexin/moms-ledger-data/contents/ledger.json";
 let items = [], filter = "all", armed = null, fresh = null;
 
 $("date").value = new Date().toLocaleDateString("en-CA");
 
-// Only accept well-formed rows, whether from storage or a backup file.
+const store = {
+  get: k => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); return true; } catch { return false; } },
+  del: k => { try { localStorage.removeItem(k); } catch {} },
+};
+
+// Only accept well-formed rows, whether from storage, a backup file or the sync repo.
 const valid = i => i && typeof i.id === "string" && /^\d{4}-\d{2}-\d{2}$/.test(i.date) && typeof i.desc === "string"
   && Number.isInteger(i.cents) && i.cents > 0 && typeof i.cat === "string";
-const sort = () => items.sort((a, b) => b.date.localeCompare(a.date) || b.created - a.created);
+const stamp = i => ({...i, paid: !!i.paid, deleted: !!i.deleted, created: Number(i.created) || 0, updated: Number(i.updated) || Number(i.created) || 0});
+const live = () => items.filter(i => !i.deleted);
+
+// Merge two copies by id; the most recently changed version of each row wins.
+// Deleted rows are kept as tombstones so a delete on one device reaches the other.
+// ponytail: tombstones are never pruned; fine for a household ledger's size.
+function merge(a, b) {
+  const byId = new Map();
+  for (const r of [...a, ...b].filter(valid).map(stamp)) {
+    const cur = byId.get(r.id);
+    if (!cur || r.updated > cur.updated) byId.set(r.id, r);
+  }
+  return [...byId.values()].sort((x, y) => y.date.localeCompare(x.date) || y.created - x.created);
+}
 
 function load() {
-  try { items = (JSON.parse(localStorage.getItem(KEY)) || []).filter(valid); sort(); }
-  catch { items = []; }
+  try { items = merge(JSON.parse(store.get(KEY)) || [], []); } catch { items = []; }
 }
 function save() {
-  sort();
-  try { localStorage.setItem(KEY, JSON.stringify(items)); note("SAVED ON THIS DEVICE · TAP A LINE WHEN MOM PAYS IT"); }
-  catch { note("DIDN'T SAVE. THIS BROWSER IS BLOCKING STORAGE (PRIVATE MODE?). SAVE A BACKUP NOW.", true); }
+  items = merge(items, []);
+  if (!store.set(KEY, JSON.stringify(items))) note("DIDN'T SAVE. THIS BROWSER IS BLOCKING STORAGE (PRIVATE MODE?).", true);
   render();
+  queueSync();
 }
 function note(text, warn) {
   $("note").replaceChildren();
@@ -159,18 +196,83 @@ function note(text, warn) {
   s.textContent = text; $("note").append(s);
 }
 
+/* ---------- GitHub sync ---------- */
+const b64 = str => btoa(String.fromCharCode(...new TextEncoder().encode(str)));
+const unb64 = str => new TextDecoder().decode(Uint8Array.from(atob(str.replace(/\n/g, "")), c => c.charCodeAt(0)));
+const token = () => store.get(TOKEN_KEY);
+const gh = (opts = {}) => fetch(API, {cache: "no-store", ...opts, headers: {Authorization: `Bearer ${token()}`, Accept: "application/vnd.github+json", ...opts.headers}});
+
+async function pull() {
+  const r = await gh();
+  if (r.status === 404) return {rows: [], sha: null};
+  if (!r.ok) throw r.status;
+  const j = await r.json();
+  return {rows: JSON.parse(unb64(j.content)), sha: j.sha};
+}
+
+let syncing = null, again = false, timer = null;
+function queueSync() {
+  if (!token()) return;
+  clearTimeout(timer); timer = setTimeout(sync, 600);
+}
+async function sync() {
+  if (!token()) return;
+  if (syncing) { again = true; return syncing; }
+  syncing = (async () => {
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const {rows, sha} = await pull();
+        const merged = merge(items, rows);
+        const localChanged = JSON.stringify(merged) !== JSON.stringify(items);
+        const remoteChanged = JSON.stringify(merged) !== JSON.stringify(merge(rows, []));
+        if (localChanged) { items = merged; store.set(KEY, JSON.stringify(items)); render(); }
+        if (!remoteChanged) break;
+        const put = await gh({method: "PUT", body: JSON.stringify({message: "Update ledger", content: b64(JSON.stringify(merged, null, 1)), ...(sha && {sha})})});
+        if (put.ok) break;
+        if (put.status !== 409 && put.status !== 422) throw put.status;   // someone else wrote first: pull and merge again
+      }
+      note(`SYNCED ${new Date().toLocaleTimeString("en-AU", {hour: "numeric", minute: "2-digit"})} · TAP A LINE WHEN MOM PAYS IT`);
+    } catch (e) {
+      note(e === 401 ? "SYNC TOKEN DOESN'T WORK. TURN SYNC OFF AND PASTE A NEW ONE."
+        : e === 403 || e === 404 ? "TOKEN CAN'T REACH moms-ledger-data. CHECK IT HAS CONTENTS: READ AND WRITE ON THAT REPO."
+        : "OFFLINE. SAVED ON THIS DEVICE, WILL SYNC WHEN YOU'RE BACK.", true);
+    }
+    syncing = null;
+    if (again) { again = false; sync(); }
+  })();
+  return syncing;
+}
+
+function showSync() {
+  $("syncOn").hidden = !token();
+  $("syncOff").hidden = !!token();
+}
+$("connect").onclick = async () => {
+  const t = $("token").value.trim();
+  if (!t) return;
+  store.set(TOKEN_KEY, t); $("token").value = ""; showSync();
+  note("CONNECTING…");
+  await sync();
+};
+$("syncNow").onclick = () => sync();
+$("disconnect").onclick = () => { store.del(TOKEN_KEY); showSync(); note("SYNC OFF ON THIS DEVICE. EXPENSES STILL SAVED HERE."); };
+addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") sync(); });
+setInterval(() => { if (document.visibilityState === "visible") sync(); }, 60000);
+
+/* ---------- UI ---------- */
 function render() {
-  const spent = items.reduce((s, i) => s + i.cents, 0);
-  const paid = items.filter(i => i.paid).reduce((s, i) => s + i.cents, 0);
+  const rows = live();
+  const spent = rows.reduce((s, i) => s + i.cents, 0);
+  const paid = rows.filter(i => i.paid).reduce((s, i) => s + i.cents, 0);
   $("tSpent").textContent = amt(spent);
   $("tPaid").textContent = "-" + amt(paid);
   $("tOwe").textContent = "$" + amt(spent - paid);
-  const first = items.reduce((m, i) => !m || i.date < m ? i.date : m, null);
+  const first = rows.reduce((m, i) => !m || i.date < m ? i.date : m, null);
   $("opened").textContent = first ? `OPEN SINCE ${first.split("-").reverse().join("/")}` : "OPEN TAB";
 
-  const shown = items.filter(i => filter === "all" || (filter === "paid") === !!i.paid);
+  const shown = rows.filter(i => filter === "all" || (filter === "paid") === i.paid);
   $("empty").hidden = shown.length > 0;
-  $("empty").textContent = items.length ? "NOTHING HERE" : "NO ITEMS YET";
+  $("empty").textContent = rows.length ? "NOTHING HERE" : "NO ITEMS YET";
   $("rows").replaceChildren(...shown.map(i => {
     const li = document.createElement("li");
     if (i.paid) li.classList.add("paid");
@@ -182,14 +284,14 @@ function render() {
     li.querySelector(".amt").textContent = amt(i.cents);
     const line = li.querySelector(".line");
     line.setAttribute("aria-label", `${i.desc}, $${amt(i.cents)}, ${i.paid ? "paid back" : "owed"}. Tap to mark ${i.paid ? "owed" : "paid back"}.`);
-    line.onclick = () => { i.paid = !i.paid; save(); };
+    line.onclick = () => { i.paid = !i.paid; i.updated = Date.now(); save(); };
     if (i.paid) li.insertAdjacentHTML("beforeend", `<span class="stamp">PAID</span>`);
     const x = li.querySelector(".x");
     x.setAttribute("aria-label", armed === i.id ? `Confirm delete ${i.desc}` : `Delete ${i.desc}`);
     if (armed === i.id) { x.classList.add("arm"); x.textContent = "SURE?"; }
     x.onclick = () => {
       if (armed !== i.id) { armed = i.id; render(); setTimeout(() => { if (armed === i.id) { armed = null; render(); } }, 3000); return; }
-      armed = null; items = items.filter(r => r !== i); save();
+      armed = null; i.deleted = true; i.updated = Date.now(); save();
     };
     return li;
   }));
@@ -206,13 +308,14 @@ $("f").addEventListener("submit", e => {
   e.preventDefault();
   const cents = Math.round(parseFloat($("amount").value) * 100);
   if (!(cents > 0)) return;
-  const row = {id: crypto.randomUUID(), date: $("date").value, desc: $("desc").value.trim(), cat: $("cat").value, cents, paid: false, created: Date.now()};
+  const now = Date.now();
+  const row = {id: crypto.randomUUID(), date: $("date").value, desc: $("desc").value.trim(), cat: $("cat").value, cents, paid: false, created: now, updated: now};
   items.push(row); fresh = row.id; save();
   $("desc").value = ""; $("amount").value = ""; $("desc").focus();
 });
 
 $("copy").onclick = async () => {
-  const owed = items.filter(i => !i.paid);
+  const owed = live().filter(i => !i.paid);
   const text = ["Hi Mom, here's what I've covered:", ...owed.map(i => `• ${dmy(i.date)}  ${i.desc}: $${amt(i.cents)}`),
     `Total owed: $${amt(owed.reduce((s, i) => s + i.cents, 0))}`].join("\n");
   try { await navigator.clipboard.writeText(text); $("copy").textContent = "COPIED ✓"; }
@@ -222,7 +325,7 @@ $("copy").onclick = async () => {
 
 $("export").onclick = () => {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(items, null, 2)], {type: "application/json"}));
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(live(), null, 2)], {type: "application/json"}));
   a.download = `moms-ledger-${new Date().toLocaleDateString("en-CA")}.json`;
   a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
@@ -234,15 +337,30 @@ $("import").onchange = async e => {
     const rows = JSON.parse(await file.text());
     if (!Array.isArray(rows)) throw 0;
     const ok = rows.filter(valid), have = new Set(items.map(i => i.id));
-    const added = ok.filter(r => !have.has(r.id)).map(r => ({...r, paid: !!r.paid, created: Number(r.created) || 0}));
+    const added = ok.filter(r => !have.has(r.id));
     items.push(...added); save();
     note(`LOADED ${added.length} NEW LINE${added.length === 1 ? "" : "S"} FROM BACKUP${ok.length < rows.length ? ` · SKIPPED ${rows.length - ok.length} BROKEN` : ""}`);
   } catch { note("THAT FILE ISN'T A LEDGER BACKUP.", true); }
 };
 
+// Self-check for the merge rules: open the site with #selftest and read the console.
+if (location.hash === "#selftest") {
+  const a = [{id: "1", date: "2026-09-01", desc: "A", cat: "Bills", cents: 100, created: 1, updated: 1}];
+  const paidLater = [{...a[0], paid: true, updated: 5}];
+  const deletedLater = [{...a[0], deleted: true, updated: 9}];
+  console.assert(merge(a, paidLater)[0].paid === true, "newer paid flag wins");
+  console.assert(merge(paidLater, a)[0].paid === true, "order doesn't matter");
+  console.assert(merge(paidLater, deletedLater)[0].deleted === true, "delete propagates");
+  console.assert(merge(a, [{id: "2", date: "2026-09-02", desc: "B", cat: "Bills", cents: 5, created: 2}]).length === 2, "new rows from both sides kept");
+  console.assert(merge(a, [{id: "3", date: "bad", desc: "x", cat: "x", cents: 5}]).length === 1, "broken rows dropped");
+  console.log("ledger selftest done");
+}
+
 load();
-note(items.length ? "SAVED ON THIS DEVICE · TAP A LINE WHEN MOM PAYS IT" : "SAVES ON THIS DEVICE · USE SAVE BACKUP NOW AND THEN");
+showSync();
+note(token() ? "SYNCING…" : "SAVED ON THIS DEVICE ONLY · TURN ON SYNC BELOW");
 render();
+sync();
 </script>
 </body>
 </html>
