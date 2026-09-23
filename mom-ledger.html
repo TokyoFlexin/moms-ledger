@@ -1,0 +1,211 @@
+<title>Mom's Ledger</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@300;400;600;800&display=swap">
+<style>
+/* System — deliberate single look: a thermal till receipt on a dark counter.
+   Type: Martian Mono only. Scale 11 / 13 / 18 / 30px. Weights 300 meta, 400 body, 800 headings.
+   Colour: counter #1f2124, paper #fbfbf6, ink #1b1b1b, faded #8b8b85, stamp red #c23b2e.
+   Rhythm: 8px; sections split by dashed rules like a real till. */
+:root{--counter:#1f2124;--paper:#fbfbf6;--ink:#1b1b1b;--faded:#8b8b85;--rule:#b9b9b1;--red:#c23b2e;--mono:"Martian Mono",ui-monospace,Menlo,monospace;color-scheme:light}
+html{background:var(--counter)}
+body{background:var(--counter);color:var(--ink);font:400 13px/1.55 var(--mono);padding-inline:16px;padding-block:32px 64px}
+.receipt{position:relative;max-width:440px;margin:0 auto;background:var(--paper);padding:28px 22px 32px;box-shadow:0 18px 40px #0006}
+.receipt::before,.receipt::after{content:"";position:absolute;left:0;right:0;height:10px;background-size:12px 10px;background-repeat:repeat-x}
+.receipt::before{top:-10px;background-image:linear-gradient(45deg,transparent 50%,var(--paper) 50%),linear-gradient(-45deg,transparent 50%,var(--paper) 50%)}
+.receipt::after{bottom:-10px;background-image:linear-gradient(135deg,var(--paper) 50%,transparent 50%),linear-gradient(-135deg,var(--paper) 50%,transparent 50%)}
+.c{text-align:center}
+h1{font-weight:800;font-size:18px;letter-spacing:.14em;margin:0;text-wrap:balance}
+.meta{font-weight:300;font-size:11px;color:var(--faded);letter-spacing:.06em}
+hr{border:0;border-top:1px dashed var(--rule);margin:14px 0}
+.lbl{font-size:11px;letter-spacing:.14em;color:var(--faded)}
+
+/* new-item slip */
+form{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
+form label{display:grid;gap:2px;font-size:11px;letter-spacing:.1em;color:var(--faded)}
+form .wide{grid-column:1/-1}
+input,select{font:400 13px var(--mono);color:var(--ink);background:transparent;border:0;border-bottom:1px dashed var(--ink);border-radius:0;padding:6px 0;min-height:36px;min-width:0;text-transform:uppercase}
+input::placeholder{color:#bdbdb5}
+#amount{text-align:right}
+button{font:600 12px var(--mono);letter-spacing:.12em;cursor:pointer;color:var(--ink);background:transparent;border:1.5px solid var(--ink);padding:10px 12px;min-height:44px}
+button.go{grid-column:1/-1;background:var(--ink);color:var(--paper)}
+button:disabled{opacity:.4;cursor:default}
+:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+
+/* filters */
+.tabs{display:flex;justify-content:center;gap:4px;flex-wrap:wrap}
+.tabs button{border:0;padding:8px 10px;font-weight:400;color:var(--faded)}
+.tabs button[aria-pressed="true"]{color:var(--ink);font-weight:800;text-decoration:underline;text-underline-offset:4px}
+
+/* line items */
+#rows{list-style:none;margin:0;padding:0}
+#rows li{display:grid;grid-template-columns:1fr 36px;align-items:center;position:relative}
+.line{all:unset;cursor:pointer;display:grid;grid-template-columns:50px 1fr auto;gap:8px;align-items:baseline;padding:8px 0;min-height:28px;font:400 13px var(--mono)}
+.line:focus-visible{outline:2px solid var(--red)}
+.dt{color:var(--faded);font-size:11px}
+.what{overflow:hidden;white-space:nowrap;text-transform:uppercase}
+.what::after{content:" . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ";color:var(--rule)}
+.what small{display:block;font-size:10px;color:var(--faded);letter-spacing:.08em}
+.what small::after{content:none}
+.amt{font-variant-numeric:tabular-nums;text-align:right}
+li.paid .what,li.paid .amt{color:var(--faded);text-decoration:line-through}
+.stamp{position:absolute;right:60px;top:50%;translate:0 -50%;rotate:-9deg;border:2px solid var(--red);color:var(--red);font-weight:800;font-size:11px;letter-spacing:.14em;padding:1px 6px;pointer-events:none;opacity:.85}
+.x{border:0;padding:0;min-height:44px;min-width:36px;color:var(--faded);font-weight:400}
+.x.arm{color:var(--red);font-weight:800;font-size:10px;letter-spacing:0}
+li.new{animation:feed .45s ease-out}
+@keyframes feed{from{clip-path:inset(0 0 100% 0);translate:0 -6px}to{clip-path:inset(0);translate:0 0}}
+@media (prefers-reduced-motion:reduce){li.new{animation:none}}
+.empty{color:var(--faded);text-align:center;padding:10px 0}
+
+/* totals */
+.sum{display:grid;grid-template-columns:1fr auto;gap:2px 12px;font-variant-numeric:tabular-nums}
+.sum span:nth-child(even){text-align:right}
+.due{font-weight:800;font-size:30px;letter-spacing:-.01em;line-height:1.2;font-variant-numeric:tabular-nums}
+.foot{font-size:11px;color:var(--faded);text-align:center;margin-top:6px}
+.warn{color:var(--red)}
+.bars{height:34px;margin:14px auto 0;width:70%;background:repeating-linear-gradient(90deg,var(--ink) 0 2px,transparent 2px 4px,var(--ink) 4px 5px,transparent 5px 8px,var(--ink) 8px 11px,transparent 11px 12px)}
+@media (max-width:420px){.receipt{padding-inline:16px}.due{font-size:26px}.stamp{right:44px}}
+</style>
+
+<main class="receipt">
+  <div class="c">
+    <h1>MOM'S TAB</h1>
+    <div class="meta">HOUSEHOLD EXPENSES · AUD</div>
+    <div class="meta" id="opened">OPEN TAB</div>
+  </div>
+  <hr>
+
+  <div class="lbl c">— NEW ITEM —</div>
+  <form id="f" autocomplete="off" style="margin-top:10px">
+    <label class="wide">WHAT FOR<input id="desc" required maxlength="80" placeholder="Electricity bill"></label>
+    <label>DATE<input id="date" type="date" required></label>
+    <label>AMOUNT $<input id="amount" type="number" inputmode="decimal" step="0.01" min="0.01" required placeholder="0.00"></label>
+    <label class="wide">CATEGORY
+      <select id="cat">
+        <option>Bills</option><option>Groceries</option><option>House</option><option>Car</option>
+        <option>Medical</option><option>Subscriptions</option><option>Other</option>
+      </select>
+    </label>
+    <button class="go" type="submit">PRINT LINE</button>
+  </form>
+  <hr>
+
+  <div class="tabs" role="group" aria-label="Show">
+    <button type="button" data-f="all" aria-pressed="true">ALL</button>
+    <button type="button" data-f="owed" aria-pressed="false">OWED</button>
+    <button type="button" data-f="paid" aria-pressed="false">PAID</button>
+  </div>
+  <ul id="rows"></ul>
+  <div class="empty" id="empty">NO ITEMS YET</div>
+  <hr>
+
+  <div class="sum">
+    <span>SUBTOTAL</span><span id="tSpent">0.00</span>
+    <span>PAID BACK</span><span id="tPaid">-0.00</span>
+  </div>
+  <hr>
+  <div class="c">
+    <div class="lbl">AMOUNT DUE</div>
+    <div class="due" id="tOwe">$0.00</div>
+  </div>
+  <hr>
+  <button type="button" id="copy" style="width:100%">COPY BILL FOR MOM</button>
+  <p class="foot" id="note">LOADING…</p>
+  <div class="bars" aria-hidden="true"></div>
+  <p class="foot">*** THANK YOU MOM ***</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const amt = c => (Math.abs(c) / 100).toLocaleString("en-AU", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const dmy = iso => { const [y, m, d] = iso.split("-"); return `${d}/${m}`; };
+let items = [], filter = "all", col = null, armed = null, fresh = null;
+
+$("date").value = new Date().toLocaleDateString("en-CA");
+
+function render() {
+  const spent = items.reduce((s, i) => s + i.cents, 0);
+  const paid = items.filter(i => i.paid).reduce((s, i) => s + i.cents, 0);
+  $("tSpent").textContent = amt(spent);
+  $("tPaid").textContent = "-" + amt(paid);
+  $("tOwe").textContent = "$" + amt(spent - paid);
+  const first = items.reduce((m, i) => !m || i.date < m ? i.date : m, null);
+  $("opened").textContent = first ? `OPEN SINCE ${first.split("-").reverse().join("/")}` : "OPEN TAB";
+
+  const shown = items.filter(i => filter === "all" || (filter === "paid") === !!i.paid);
+  $("empty").hidden = shown.length > 0;
+  $("empty").textContent = items.length ? "NOTHING HERE" : "NO ITEMS YET";
+  $("rows").replaceChildren(...shown.map(i => {
+    const li = document.createElement("li");
+    if (i.paid) li.classList.add("paid");
+    if (i.id === fresh) li.classList.add("new");
+    li.innerHTML = `<button type="button" class="line"><span class="dt"></span><span class="what"><span class="t"></span><small></small></span><span class="amt"></span></button><button type="button" class="x">✕</button>`;
+    li.querySelector(".dt").textContent = dmy(i.date);
+    li.querySelector(".t").textContent = i.desc;
+    li.querySelector("small").textContent = i.cat;
+    li.querySelector(".amt").textContent = amt(i.cents);
+    const line = li.querySelector(".line");
+    line.setAttribute("aria-label", `${i.desc}, $${amt(i.cents)}, ${i.paid ? "paid back" : "owed"}. Tap to mark ${i.paid ? "owed" : "paid back"}.`);
+    line.onclick = () => col.doc(i.id).update({paid: !i.paid}).catch(fail);
+    if (i.paid) li.insertAdjacentHTML("beforeend", `<span class="stamp">PAID</span>`);
+    const x = li.querySelector(".x");
+    x.setAttribute("aria-label", armed === i.id ? `Confirm delete ${i.desc}` : `Delete ${i.desc}`);
+    if (armed === i.id) { x.classList.add("arm"); x.textContent = "SURE?"; }
+    x.onclick = () => {
+      if (armed !== i.id) { armed = i.id; render(); setTimeout(() => { if (armed === i.id) { armed = null; render(); } }, 3000); return; }
+      armed = null; col.doc(i.id).delete().catch(fail);
+    };
+    return li;
+  }));
+  fresh = null;
+}
+
+function fail(e) {
+  $("note").replaceChildren();
+  const s = document.createElement("span"); s.className = "warn";
+  s.textContent = e?.code === "quota_exceeded" ? "ROLL FULL. DELETE OLD PAID LINES TO ADD MORE."
+    : e?.code === "invalid_argument" ? "VIEW ONLY. YOU CAN'T CHANGE THIS TAB."
+    : "DIDN'T SAVE. CHECK YOUR CONNECTION AND TRY AGAIN.";
+  $("note").append(s);
+}
+
+document.querySelectorAll("[data-f]").forEach(b => b.onclick = () => {
+  filter = b.dataset.f;
+  document.querySelectorAll("[data-f]").forEach(x => x.setAttribute("aria-pressed", x === b));
+  render();
+});
+
+$("f").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (!col) return;
+  const cents = Math.round(parseFloat($("amount").value) * 100);
+  if (!(cents > 0)) return;
+  const btn = e.submitter; btn.disabled = true;
+  try {
+    const ref = col.doc();
+    fresh = ref.id;
+    await ref.set({date: $("date").value, desc: $("desc").value.trim(), cat: $("cat").value, cents, paid: false, created: Date.now()});
+    $("desc").value = ""; $("amount").value = ""; $("desc").focus();
+  } catch (err) { fresh = null; fail(err); }
+  btn.disabled = false;
+});
+
+$("copy").onclick = async () => {
+  const owed = items.filter(i => !i.paid);
+  const text = ["Hi Mom, here's what I've covered:", ...owed.map(i => `• ${dmy(i.date)}  ${i.desc}: $${amt(i.cents)}`),
+    `Total owed: $${amt(owed.reduce((s, i) => s + i.cents, 0))}`].join("\n");
+  try { await navigator.clipboard.writeText(text); $("copy").textContent = "COPIED ✓"; }
+  catch { $("copy").textContent = "COULDN'T COPY"; }
+  setTimeout(() => $("copy").textContent = "COPY BILL FOR MOM", 2000);
+};
+
+(async () => {
+  const db = await window.claude?.use?.("db");
+  if (!db) { $("note").textContent = "SAVING ISN'T AVAILABLE HERE. OPEN THIS FROM CLAUDE.AI."; $("f").querySelector("button").disabled = true; render(); return; }
+  col = db.collection("expenses");
+  col.orderBy("date", "desc").onSnapshot(snap => {
+    items = snap.docs.map(d => ({id: d.id, ...d.data()}));
+    $("note").textContent = "SAVED AUTOMATICALLY · TAP A LINE WHEN MOM PAYS IT";
+    render();
+  }, fail);
+})();
+render();
+</script>
