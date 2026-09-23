@@ -2,6 +2,6 @@
 
 A receipt-style expense ledger for tracking what I pay while Mom is overseas and what she has paid back.
 
-Live (saves data): https://claude.ai/artifact/Wqhgqe2yDZVMZ57UE7KVs8
+Live: https://tokyoflexin.github.io/moms-ledger/
 
-`mom-ledger.html` is the page source. Saving uses the claude.ai artifact database, so opening the file locally shows the layout but will not save entries.
+Expenses are saved in the browser on each device (localStorage), never in this repo. Use **Save backup** / **Load backup** to keep a copy or move to another device.

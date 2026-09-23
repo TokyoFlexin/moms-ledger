@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mom's Ledger</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Martian+Mono:wght@300;400;600;800&display=swap">
 <style>
@@ -7,7 +12,9 @@
    Rhythm: 8px; sections split by dashed rules like a real till. */
 :root{--counter:#1f2124;--paper:#fbfbf6;--ink:#1b1b1b;--faded:#8b8b85;--rule:#b9b9b1;--red:#c23b2e;--mono:"Martian Mono",ui-monospace,Menlo,monospace;color-scheme:light}
 html{background:var(--counter)}
-body{background:var(--counter);color:var(--ink);font:400 13px/1.55 var(--mono);padding-inline:16px;padding-block:32px 64px}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--counter);color:var(--ink);font:400 13px/1.55 var(--mono);padding-inline:16px;padding-block:32px 64px}
 .receipt{position:relative;max-width:440px;margin:0 auto;background:var(--paper);padding:28px 22px 32px;box-shadow:0 18px 40px #0006}
 .receipt::before,.receipt::after{content:"";position:absolute;left:0;right:0;height:10px;background-size:12px 10px;background-repeat:repeat-x}
 .receipt::before{top:-10px;background-image:linear-gradient(45deg,transparent 50%,var(--paper) 50%),linear-gradient(-45deg,transparent 50%,var(--paper) 50%)}
@@ -61,9 +68,13 @@ li.new{animation:feed .45s ease-out}
 .due{font-weight:800;font-size:30px;letter-spacing:-.01em;line-height:1.2;font-variant-numeric:tabular-nums}
 .foot{font-size:11px;color:var(--faded);text-align:center;margin-top:6px}
 .warn{color:var(--red)}
+.backup{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.backup button{font-weight:400;border-style:dashed}
 .bars{height:34px;margin:14px auto 0;width:70%;background:repeating-linear-gradient(90deg,var(--ink) 0 2px,transparent 2px 4px,var(--ink) 4px 5px,transparent 5px 8px,var(--ink) 8px 11px,transparent 11px 12px)}
 @media (max-width:420px){.receipt{padding-inline:16px}.due{font-size:26px}.stamp{right:44px}}
 </style>
+</head>
+<body>
 
 <main class="receipt">
   <div class="c">
@@ -108,6 +119,11 @@ li.new{animation:feed .45s ease-out}
   </div>
   <hr>
   <button type="button" id="copy" style="width:100%">COPY BILL FOR MOM</button>
+  <div class="backup">
+    <button type="button" id="export">SAVE BACKUP</button>
+    <button type="button" id="importBtn">LOAD BACKUP</button>
+    <input type="file" id="import" accept="application/json,.json" hidden>
+  </div>
   <p class="foot" id="note">LOADING…</p>
   <div class="bars" aria-hidden="true"></div>
   <p class="foot">*** THANK YOU MOM ***</p>
@@ -117,9 +133,31 @@ li.new{animation:feed .45s ease-out}
 const $ = id => document.getElementById(id);
 const amt = c => (Math.abs(c) / 100).toLocaleString("en-AU", {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const dmy = iso => { const [y, m, d] = iso.split("-"); return `${d}/${m}`; };
-let items = [], filter = "all", col = null, armed = null, fresh = null;
+const KEY = "moms-ledger-v1";
+let items = [], filter = "all", armed = null, fresh = null;
 
 $("date").value = new Date().toLocaleDateString("en-CA");
+
+// Only accept well-formed rows, whether from storage or a backup file.
+const valid = i => i && typeof i.id === "string" && /^\d{4}-\d{2}-\d{2}$/.test(i.date) && typeof i.desc === "string"
+  && Number.isInteger(i.cents) && i.cents > 0 && typeof i.cat === "string";
+const sort = () => items.sort((a, b) => b.date.localeCompare(a.date) || b.created - a.created);
+
+function load() {
+  try { items = (JSON.parse(localStorage.getItem(KEY)) || []).filter(valid); sort(); }
+  catch { items = []; }
+}
+function save() {
+  sort();
+  try { localStorage.setItem(KEY, JSON.stringify(items)); note("SAVED ON THIS DEVICE · TAP A LINE WHEN MOM PAYS IT"); }
+  catch { note("DIDN'T SAVE. THIS BROWSER IS BLOCKING STORAGE (PRIVATE MODE?). SAVE A BACKUP NOW.", true); }
+  render();
+}
+function note(text, warn) {
+  $("note").replaceChildren();
+  const s = document.createElement("span"); if (warn) s.className = "warn";
+  s.textContent = text; $("note").append(s);
+}
 
 function render() {
   const spent = items.reduce((s, i) => s + i.cents, 0);
@@ -144,27 +182,18 @@ function render() {
     li.querySelector(".amt").textContent = amt(i.cents);
     const line = li.querySelector(".line");
     line.setAttribute("aria-label", `${i.desc}, $${amt(i.cents)}, ${i.paid ? "paid back" : "owed"}. Tap to mark ${i.paid ? "owed" : "paid back"}.`);
-    line.onclick = () => col.doc(i.id).update({paid: !i.paid}).catch(fail);
+    line.onclick = () => { i.paid = !i.paid; save(); };
     if (i.paid) li.insertAdjacentHTML("beforeend", `<span class="stamp">PAID</span>`);
     const x = li.querySelector(".x");
     x.setAttribute("aria-label", armed === i.id ? `Confirm delete ${i.desc}` : `Delete ${i.desc}`);
     if (armed === i.id) { x.classList.add("arm"); x.textContent = "SURE?"; }
     x.onclick = () => {
       if (armed !== i.id) { armed = i.id; render(); setTimeout(() => { if (armed === i.id) { armed = null; render(); } }, 3000); return; }
-      armed = null; col.doc(i.id).delete().catch(fail);
+      armed = null; items = items.filter(r => r !== i); save();
     };
     return li;
   }));
   fresh = null;
-}
-
-function fail(e) {
-  $("note").replaceChildren();
-  const s = document.createElement("span"); s.className = "warn";
-  s.textContent = e?.code === "quota_exceeded" ? "ROLL FULL. DELETE OLD PAID LINES TO ADD MORE."
-    : e?.code === "invalid_argument" ? "VIEW ONLY. YOU CAN'T CHANGE THIS TAB."
-    : "DIDN'T SAVE. CHECK YOUR CONNECTION AND TRY AGAIN.";
-  $("note").append(s);
 }
 
 document.querySelectorAll("[data-f]").forEach(b => b.onclick = () => {
@@ -173,19 +202,13 @@ document.querySelectorAll("[data-f]").forEach(b => b.onclick = () => {
   render();
 });
 
-$("f").addEventListener("submit", async e => {
+$("f").addEventListener("submit", e => {
   e.preventDefault();
-  if (!col) return;
   const cents = Math.round(parseFloat($("amount").value) * 100);
   if (!(cents > 0)) return;
-  const btn = e.submitter; btn.disabled = true;
-  try {
-    const ref = col.doc();
-    fresh = ref.id;
-    await ref.set({date: $("date").value, desc: $("desc").value.trim(), cat: $("cat").value, cents, paid: false, created: Date.now()});
-    $("desc").value = ""; $("amount").value = ""; $("desc").focus();
-  } catch (err) { fresh = null; fail(err); }
-  btn.disabled = false;
+  const row = {id: crypto.randomUUID(), date: $("date").value, desc: $("desc").value.trim(), cat: $("cat").value, cents, paid: false, created: Date.now()};
+  items.push(row); fresh = row.id; save();
+  $("desc").value = ""; $("amount").value = ""; $("desc").focus();
 });
 
 $("copy").onclick = async () => {
@@ -197,15 +220,29 @@ $("copy").onclick = async () => {
   setTimeout(() => $("copy").textContent = "COPY BILL FOR MOM", 2000);
 };
 
-(async () => {
-  const db = await window.claude?.use?.("db");
-  if (!db) { $("note").textContent = "SAVING ISN'T AVAILABLE HERE. OPEN THIS FROM CLAUDE.AI."; $("f").querySelector("button").disabled = true; render(); return; }
-  col = db.collection("expenses");
-  col.orderBy("date", "desc").onSnapshot(snap => {
-    items = snap.docs.map(d => ({id: d.id, ...d.data()}));
-    $("note").textContent = "SAVED AUTOMATICALLY · TAP A LINE WHEN MOM PAYS IT";
-    render();
-  }, fail);
-})();
+$("export").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(items, null, 2)], {type: "application/json"}));
+  a.download = `moms-ledger-${new Date().toLocaleDateString("en-CA")}.json`;
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$("importBtn").onclick = () => $("import").click();
+$("import").onchange = async e => {
+  const file = e.target.files[0]; e.target.value = "";
+  if (!file) return;
+  try {
+    const rows = JSON.parse(await file.text());
+    if (!Array.isArray(rows)) throw 0;
+    const ok = rows.filter(valid), have = new Set(items.map(i => i.id));
+    const added = ok.filter(r => !have.has(r.id)).map(r => ({...r, paid: !!r.paid, created: Number(r.created) || 0}));
+    items.push(...added); save();
+    note(`LOADED ${added.length} NEW LINE${added.length === 1 ? "" : "S"} FROM BACKUP${ok.length < rows.length ? ` · SKIPPED ${rows.length - ok.length} BROKEN` : ""}`);
+  } catch { note("THAT FILE ISN'T A LEDGER BACKUP.", true); }
+};
+
+load();
+note(items.length ? "SAVED ON THIS DEVICE · TAP A LINE WHEN MOM PAYS IT" : "SAVES ON THIS DEVICE · USE SAVE BACKUP NOW AND THEN");
 render();
 </script>
+</body>
+</html>
